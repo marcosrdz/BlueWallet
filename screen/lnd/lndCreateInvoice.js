@@ -55,7 +55,7 @@ export default class LNDCreateInvoice extends Component {
 
   componentDidMount() {
     if (this.props.navigation.state.params.uri) {
-      this.processLnurl(this.props.navigation.getParam('uri'));
+      this.processLnurlWithdraw(this.props.navigation.getParam('uri'));
     }
   }
 
@@ -94,7 +94,7 @@ export default class LNDCreateInvoice extends Component {
     });
   }
 
-  processLnurl = data => {
+  processLnurlWithdraw = data => {
     this.setState({ isLoading: true }, async () => {
       if (!this.state.fromWallet) {
         ReactNativeHapticFeedback.trigger('notificationError', { ignoreAndroidSystemSettings: false });
@@ -109,7 +109,6 @@ export default class LNDCreateInvoice extends Component {
       }
 
       data = data.replace('LIGHTNING:', '').replace('lightning:', '');
-      console.log(data);
 
       // decoding the lnurl
       let decoded = bech32.decode(data, 1500);
@@ -127,7 +126,7 @@ export default class LNDCreateInvoice extends Component {
         }
 
         if (reply.tag !== 'withdrawRequest') {
-          throw new Error('Unsupported lnurl');
+          throw new Error('lnurl-withdraw expected, found tag ' + reply.tag);
         }
 
         // setting the invoice creating screen with the parameters
@@ -169,7 +168,7 @@ export default class LNDCreateInvoice extends Component {
       <TouchableOpacity
         disabled={this.state.isLoading}
         onPress={() => {
-          NavigationService.navigate('ScanQrAddress', { onBarScanned: this.processLnurl });
+          NavigationService.navigate('ScanQrAddress', { onBarScanned: this.processLnurlWithdraw });
           Keyboard.dismiss();
         }}
         style={{
