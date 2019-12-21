@@ -10,6 +10,7 @@ import {
   TouchableOpacity,
   Text,
 } from 'react-native';
+import debounce from 'debounce';
 import { BlueNavigationStyle, BlueButton, BlueBitcoinAmount, BlueDismissKeyboardInputAccessory } from '../../BlueComponents';
 import { LightningCustodianWallet } from '../../class/lightning-custodian-wallet';
 import PropTypes from 'prop-types';
@@ -54,8 +55,8 @@ export default class LNDCreateInvoice extends Component {
   }
 
   componentDidMount() {
-    if (this.props.navigation.state.params.uri) {
-      this.processLnurlWithdraw(this.props.navigation.getParam('uri'));
+    if (this.props.navigation.state.params.lnurlData) {
+      this.processLnurlWithdraw(this.props.navigation.getParam('lnurlData'));
     }
   }
 
@@ -102,52 +103,55 @@ export default class LNDCreateInvoice extends Component {
         return this.props.navigation.goBack();
       }
 
-      // handling fallback lnurl
-      let ind = data.indexOf('lightning=');
-      if (ind !== -1) {
-        data = data.substring(ind + 10).split('&')[0];
-      }
+      if (typeof data === 'string') {
+        try {
+          // handling fallback lnurl
+          let ind = data.indexOf('lightning=');
+          if (ind !== -1) {
+            data = data.substring(ind + 10).split('&')[0];
+          }
 
-      data = data.replace('LIGHTNING:', '').replace('lightning:', '');
+          data = data.replace('LIGHTNING:', '').replace('lightning:', '');
 
-      // decoding the lnurl
-      let decoded = bech32.decode(data, 1500);
-      let url = Buffer.from(bech32.fromWords(decoded.words)).toString();
+          // decoding the lnurl
+          let decoded = bech32.decode(data, 1500);
+          let url = Buffer.from(bech32.fromWords(decoded.words)).toString();
 
-      // calling the url
-      try {
-        let resp = await fetch(url, { method: 'GET' });
-        if (resp.status >= 300) {
-          throw new Error('Bad response from server');
+          // calling the url
+          let resp = await fetch(url, { method: 'GET' });
+          if (resp.status >= 300) {
+            throw new Error('Bad response from server');
+          }
+          let reply = await resp.json();
+          if (reply.status === 'ERROR') {
+            throw new Error('Reply from server: ' + reply.reason);
+          }
+          if (reply.tag !== 'withdrawRequest') {
+            throw new Error('lnurl-withdraw expected, found tag ' + reply.tag);
+          }
+
+          data = reply
+        } catch (Err) {
+          Keyboard.dismiss();
+          this.setState({ isLoading: false });
+          ReactNativeHapticFeedback.trigger('notificationError', { ignoreAndroidSystemSettings: false });
+          alert(Err.message);
         }
-        let reply = await resp.json();
-        if (reply.status === 'ERROR') {
-          throw new Error('Reply from server: ' + reply.reason);
-        }
+      } // else: data is already an object containing the reply data from service.
 
-        if (reply.tag !== 'withdrawRequest') {
-          throw new Error('lnurl-withdraw expected, found tag ' + reply.tag);
-        }
-
-        // setting the invoice creating screen with the parameters
-        this.setState({
-          isLoading: false,
-          lnurlParams: {
-            k1: reply.k1,
-            callback: reply.callback,
-            fixed: reply.minWithdrawable === reply.maxWithdrawable,
-            min: (reply.minWithdrawable || 0) / 1000,
-            max: reply.maxWithdrawable / 1000,
-          },
-          amount: (reply.maxWithdrawable / 1000).toString(),
-          description: reply.defaultDescription,
-        });
-      } catch (Err) {
-        Keyboard.dismiss();
-        this.setState({ isLoading: false });
-        ReactNativeHapticFeedback.trigger('notificationError', { ignoreAndroidSystemSettings: false });
-        alert(Err.message);
-      }
+      // setting the invoice creating screen with the parameters
+      this.setState({
+        isLoading: false,
+        lnurlParams: {
+          k1: data.k1,
+          callback: data.callback,
+          fixed: data.minWithdrawable === data.maxWithdrawable,
+          min: (data.minWithdrawable || 0) / 1000,
+          max: data.maxWithdrawable / 1000,
+        },
+        amount: (data.maxWithdrawable / 1000).toString(),
+        description: data.defaultDescription,
+      });
     });
   };
 
@@ -168,7 +172,9 @@ export default class LNDCreateInvoice extends Component {
       <TouchableOpacity
         disabled={this.state.isLoading}
         onPress={() => {
-          NavigationService.navigate('ScanQrAddress', { onBarScanned: this.processLnurlWithdraw });
+          NavigationService.navigate('ScanQrAddress', {
+            onBarScanned: this.processLnurlWithdraw
+          });
           Keyboard.dismiss();
         }}
         style={{
@@ -198,6 +204,20 @@ export default class LNDCreateInvoice extends Component {
       );
     }
 
+    var constrainAmount = () => {}
+    if (this.state.lnurlParams) {
+      let { min, max } = this.state.lnurlParams;
+
+      constrainAmount = debounce(() => {
+        var amount = parseInt(this.state.amount)
+        if (amount < min) {
+          this.setState({ amount: min.toString() });
+        } else if (amount > max) {
+          this.setState({ amount: max.toString() });
+        }
+      }, 2000);
+    }
+
     return (
       <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
         <View style={{ flex: 1, justifyContent: 'space-between' }}>
@@ -207,18 +227,7 @@ export default class LNDCreateInvoice extends Component {
                 isLoading={this.state.isLoading}
                 amount={this.state.amount}
                 onChangeText={text => {
-                  if (this.state.lnurlParams) {
-                    // in this case we prevent the user from changing the amount to < min or > max
-                    let { min, max } = this.state.lnurlParams;
-                    let nextAmount = parseInt(text);
-                    if (nextAmount < min) {
-                      text = min.toString();
-                    } else if (nextAmount > max) {
-                      text = max.toString();
-                    }
-                  }
-
-                  this.setState({ amount: text });
+                  this.setState({ amount: text }, constrainAmount);
                 }}
                 disabled={this.state.isLoading || (this.state.lnurlParams && this.state.lnurlParams.fixed)}
                 unit={BitcoinUnit.SATS}
@@ -269,7 +278,7 @@ LNDCreateInvoice.propTypes = {
     getParam: PropTypes.func,
     state: PropTypes.shape({
       params: PropTypes.shape({
-        uri: PropTypes.string,
+        lnurlData: PropTypes.shape({}),
         fromWallet: PropTypes.shape({}),
       }),
     }),
